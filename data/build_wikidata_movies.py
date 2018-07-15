@@ -150,7 +150,7 @@ def make_custom_map(category):
         functions.explode(wd[category]).alias('wikidata_id')).distinct()
     data = functions.broadcast(data)
     data = data.join(label_map, on='wikidata_id')
-    data = data.withColumnRenamed('label', 'name')
+    data = data.withColumnRenamed('label', category)
     data.coalesce(1).write.json('./{}'.format(category), mode='overwrite',
                                 compression='gzip')
 
