@@ -101,7 +101,7 @@ def make_wikidata_movies():
         #wd['filming_location'],
         take_first(wd, 'series'),
         #wd['voice_actor'],
-        #wd['executive_producer'],
+        wd['executive_producer'],
         #wd['composer'],
         #take_first(wd, 'production_company'),
         #take_first(wd, 'distributor'),
@@ -151,6 +151,7 @@ def make_custom_map(category):
     data = functions.broadcast(data)
     data = data.join(label_map, on='wikidata_id')
     data = data.withColumnRenamed('label', category)
+    # output is less than 4MB for each category: safe to coalesce()
     data.coalesce(1).write.json('./{}'.format(category), mode='overwrite',
                                 compression='gzip')
 
@@ -159,6 +160,8 @@ if __name__ == "__main__":
     category = sys.argv[2]
     if category == 'movies':
         make_wikidata_movies()
+    elif category == 'genres':
+        make_genre_map()
     else:
         make_custom_map(category)
     # make_cast_member_map()
