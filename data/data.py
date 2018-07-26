@@ -4,7 +4,7 @@ import numpy as np
 import gzip
 
 
-def json_to_dataframe(file):
+def json_to_df(file):
     """
     opens the gzip file into a pd dataframe
     :param file: string, name of the file
@@ -14,7 +14,19 @@ def json_to_dataframe(file):
                                   encoding='utf-8'), lines=True)
     return data
 
-#
+
+def df_to_json(df, file):
+    """
+    saves pd dataframe as gzip file
+    :param df: Dataframe
+    :param file: String, name of the gzip file
+    :return:
+    """
+    df.to_json('json/{}.json.gz'.format(file),
+               orient='records',
+               lines=True,
+               compression='gzip')
+
 # def replace_id(ids, id_mapping):
 #     mapped = []
 #     if isinstance(ids, list):
@@ -110,6 +122,7 @@ def stats_by_column(data, column):
     count_df = pd.DataFrame({column: count.index, 'movies': count.values})
     return pd.merge(avg_df, count_df, on=column)
 
+
 def main():
     wiki_data_file = sys.argv[1]
     mapping_json_files = ['cast_member', 'director', 'genre']
@@ -117,19 +130,30 @@ def main():
     mapping_df = {}
 
     for file in mapping_json_files:
-        mapping_df[file] = json_to_dataframe(file)
+        mapping_df[file] = json_to_df(file)
 
-    wikidata_df = json_to_dataframe(wiki_data_file)
-    omdb_data_df = json_to_dataframe('omdb-data')
-    rotten_tomatoes_df = json_to_dataframe('rotten-tomatoes')
+    wikidata_df = json_to_df(wiki_data_file)
+    omdb_data_df = json_to_df('omdb-data')
+    rotten_tomatoes_df = json_to_df('rotten-tomatoes')
 
     wikidata_df = clean_return_data(wikidata_df)
     wikidata_df = pd.merge(wikidata_df, rotten_tomatoes_df,
                            on='rotten_tomatoes_id')
 
 
-    wikidata_cast_member_df = stats_by_column(wikidata_df, 'cast_member')
-    mapped = map_wikidata_id(wikidata_cast_member_df, mapping_df, 'cast_member')
+    wikidata_cm_df = stats_by_column(wikidata_df, 'cast_member')
+    mapped_cm = map_wikidata_id(wikidata_cm_df, mapping_df, 'cast_member')
+
+    wikidata_genre_df = stats_by_column(wikidata_df, 'genre')
+    mapped_genre = map_wikidata_id(wikidata_genre_df, mapping_df, 'genre')
+
+    wikidata_director_df = stats_by_column(wikidata_df, 'director')
+    mapped_director = map_wikidata_id(wikidata_director_df, mapping_df, 'director')
+
+    df_to_json(mapped_cm, 'sorted_by_cast_member')
+    df_to_json(mapped_genre, 'sorted_by_genre')
+    df_to_json(mapped_director, 'sorted_by_director')
+
     print(mapping_json_files)
 
 
