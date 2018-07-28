@@ -5,7 +5,6 @@ import gzip
 from os import path
 
 JSON_PATH = path.dirname(__file__) + '/json/{}.json.gz'
-CATEGORIES = ['cast_member', 'director', 'genre']
 
 
 def json_to_df(file):
@@ -32,45 +31,21 @@ def df_to_json(df, file):
                compression='gzip')
 
 
-def replace_ids(ids, id_mapping):
+def prep_wikidata(wikidata_df, category, rating):
     """
-    Given a list of ids, map each id to a proper name
-    :param ids: list of strings, wikidata ids
-    :param id_mapping: Dict, ids with their corresponding proper name
-    :return: list of proper names
+    Remove extra columns of the wikidata dataframe and only keep a specific
+    category ('cast_member', 'director', 'genre'), 'label', 'publication_date',
+    'return' (nbox/ncost), and 'wikidata_id'. Remove any NaN in category
+    :param wikidata_df: Dataframe, wikidata dataframe
+    :param category: String, column of interest
+    :return: dataframe with extra columns removed
     """
-    mapped = []
-    if isinstance(ids, list):
-        for id in ids:
-            if id in id_mapping:
-                mapped += [id_mapping[id]]
-    if mapped:
-        return mapped
-    else:
-        return np.nan
-
-
-def map_wikidata_id(wikidata_df, category):
-    """
-    Map all the ids of the category in the wikidata dataframe
-    :param wikidata_df: Dataframe, wikidata
-    :param category: String, category to map
-    :return: dataframe
-    """
-    mapping_df = json_to_df(category)
-    mapping = mapping_df.set_index(
-        'wikidata_id').T.to_dict('records')[0]
-
-    # If the column contains a list, use the apply function
-    if isinstance(wikidata_df[category].dropna().iloc[0], list):
-        wikidata_df[category] = wikidata_df[category].apply(
-            replace_ids,
-            id_mapping=mapping
-        )
-    # Else, the values can be mapped
-    else:
-        wikidata_df[category] = wikidata_df[category].map(mapping)
-
+    columns = [category, 'label', 'publication_date', 'wikidata_id',
+               'rotten_tomatoes_id']
+    if rating == 'return':
+        columns += ['return']
+    wikidata_df = wikidata_df[columns]
+    wikidata_df = wikidata_df.dropna(subset=[category])
     return wikidata_df
 
 
@@ -78,7 +53,7 @@ def clean_return_data(data):
     """
     removes all rows without values in "return" and values deemed too small
     or too large
-    :param data: dataframe, dataframe to be clean
+    :param data: dataframe, dataframe to be cleaned
     :return: dataframe
     """
     data = data[pd.notnull(data['return'])]
@@ -88,14 +63,43 @@ def clean_return_data(data):
                             ascending=False)
 
 
-def clean_rt_data(data):
+def merge_rt_data(wikidata_df, rating):
     """
-    Removes bad values from the Rotten Tomatoes dataframe
-    :param data: dataframe, Rotten Tomatoes data
-    :return: dataframe
+    Combine wikidata with rotten tomatoes data to get specific rating
+    :param wikidata_df: Dataframe, wikidata dataframe
+    :param rating: String
+    :return:
     """
-    data = data.dropna()
+    rt_df = json_to_df('rotten-tomatoes')
+    rt_df = rt_df[['rotten_tomatoes_id', rating]]
+    rt_df = rt_df.dropna(subset=[rating])
+    wikidata_df = pd.merge(wikidata_df, rt_df, on='rotten_tomatoes_id')
+    return wikidata_df
+
+
+def map_wikidata_id(data, category):
+    """
+    Map the wikidata id to the corresponding label
+    :param data: Dataframe, dataframe with wikidata_id to be mapped
+    :param category: String, column of interest
+    :return: Dataframe with column mapped
+    """
+    category_df = json_to_df(category)
+    mapping = category_df.set_index('wikidata_id').T.to_dict('records')[0]
+    data[category] = data[category].apply(map_list_of_ids, mapping=mapping)
     return data
+
+
+def map_list_of_ids(category, mapping):
+    """
+    Maps a list of wikidata_ids to its proper name
+    :param category: List, list of wikidata_ids
+    :param mapping: Dict, wikidata to proper name
+    :return: List of proper names
+    """
+    series = pd.Series(category)
+    mapped_series = series.map(mapping)
+    return mapped_series.tolist()
 
 
 def split_list_into_rows(row, row_accumulator, column):
@@ -132,137 +136,105 @@ def explode_dataframe_by_column(data, column):
     return new_df
 
 
-def stats_by_column(data, column, score):
+def avg_by_category(data, category, rating):
     """
-    Keeps numerical values of interest around the 'column' and organizes the
+    Keeps numerical values of interest around the 'category' and organizes the
     dataframe by the person of interest.
-    :param data: Dataframe, wikidata with rotten tomatoe data
-    :param column: String, column of interest
+    :param data: Dataframe, wikidata with category of interest
+    :param category: String, column of interest
+    :param rating: String, type of rating to focus
     :return: Dataframe, organized by persons average scores and number of movies
     """
-    new_df = explode_dataframe_by_column(data, column)
-    req_columns = [column, score]
+    new_df = explode_dataframe_by_column(data, category)
+    req_columns = [category, rating]
 
-    grouped_df = new_df[req_columns].groupby(column)
+    grouped_df = new_df[req_columns].groupby(category)
     avg_df = grouped_df.agg('mean')
-    count = grouped_df[column].count()
-    count_df = pd.DataFrame({column: count.index, 'movies': count.values})
-    merged_df = pd.merge(avg_df, count_df, on=column)
-    new_columns = list(merged_df.columns.values)
-    new_columns.insert(0, new_columns.pop(new_columns.index(column)))
-    merged_df = merged_df[new_columns]
+    count = grouped_df[category].count()
+    count_df = pd.DataFrame({category: count.index, 'movies': count.values})
+    merged_df = pd.merge(avg_df, count_df, on=category)
     return merged_df
 
 
-def mapping_and_splitting(wikidata_df, category, score, make_json=False):
-    """
-    Creates a dataframe of average scores by the category. Can make a json.gzip
-    file
-    :param wiki_data_file: Dataframe, wikidata of movies
-    :param category: String, category to focus on
-    :param make_json: Bool, option to create a json file
-    :return dataframe with wikidata ids mapped
-    """
-
-    wikidata_cm_df = stats_by_column(wikidata_df, category, score)
-    mapped_cm = map_wikidata_id(wikidata_cm_df, category)
-    if make_json:
-        df_to_json(mapped_cm, 'avg_by_{}'.format(category))
-    return mapped_cm
-
-
-def get_top(data, score):
+def get_top(data, rating, num_of_influencers):
     """
     Remove any person involved in less than 5 movies (arbitrary) and sort by the
-    score (return, rotten_tomatos scores). Select the top 50 values
-    :param data: dataframe
-    :param score: string
+    rating (return, rotten_tomatos scores). Select the top
+    x (num of influncers) values
+    :param data: Dataframe,
+    :param rating: String, type of rating to focus
     :return: dataframe sorted by descending score,
     """
     data = data.loc[(data['movies'] >= 5)]
-    data = data.sort_values(score, ascending=False)
-    data = data.head(50)
+    data = data.sort_values(rating, ascending=False)
+    data = data.head(num_of_influencers)
     return data
 
 
-def get_interesting_points(wikidata_df, score, make_file=False):
+def get_best_rated(wikidata_df, category, rating, num_of_influencers):
     """
-    Find all the top points of each category
+    Find all the top people/genre of each category
     :param wikidata_df: Dataframe, wikidata
-    :param score: string, criteria to focus on
-    :param make_file: bool, if true create a json file
-    :return: dataframe of top points
+    :param rating: String, type of rating to focus
+    :return: list of best rated people/genres
     """
-    top_categories = []
-
-    for category in CATEGORIES:
-        mapped_df = mapping_and_splitting(wikidata_df, category, score)
-        cleaned_df = get_top(mapped_df, score)
-        top_categories += cleaned_df[category].tolist()
-
-    interesting_points = pd.DataFrame(top_categories, columns=['point'])
-    if make_file:
-        df_to_json(interesting_points, 'interesting_points_by_{}'.format(score))
-    return interesting_points
+    data = avg_by_category(wikidata_df, category, rating)
+    best_rated = get_top(data, rating, num_of_influencers)
+    return best_rated[category].tolist()
 
 
-def filter_and_join(row, interesting_points):
+def filter_category(category, influencers):
     """
-    Combine all the catergories into one column and ignore points that are
-    not interesting
-    :param row: row of wikidat
-    :param interesting_points: list of strings: interesting points
-    :return:
+    Ignore values not in the list of influencers
+    :param category: List, influencing points in a category
+    :param influencers: List, most popular infleuncing points
+    :return: List, only popular influencers
     """
-    new_list = []
-
-    for category in CATEGORIES:
-        # Ignore if column is nan
-        if isinstance(row[category], list):
-            for value in row[category]:
-                # Filter out points
-                if value in interesting_points:
-                    new_list += [value]
-
+    new_list = list(set(influencers) & set(category))
     if new_list:
         return new_list
     else:
         return np.nan
 
 
-def get_filtered_wikidata(wikidata_file, score):
+def get_filtered_wikidata(wikidata_file, category, rating,
+                          num_of_influencers=50):
+    """
+    Filter the movie database and select the category and
+    :param wikidata_file: String, name of the wikidata file
+    :param category: String, category of interest (genre, cast_member, director)
+    :param rating: String, type of rating to focus
+    :param num_of_influencers: int, number of popular categories to use
+    :return:
+    """
     """
     Get the notable points (cast members, directors, genres) of a movie and the
     score in question (money return or rotten tomatoes score)
     :param wikidata_file: String, name of the wikidata movie file
-    :param score: string, score to focus on
+    :param score: string, rating to focus on
     :return: Dataframe, filtered dataframe with all notable points
     """
     wikidata_df = json_to_df(wikidata_file)
+    wikidata_df = prep_wikidata(wikidata_df, category, rating)
 
-    if score == 'return':
+    if rating == 'return':
         wikidata_df = clean_return_data(wikidata_df)
+    # audience_average, audience_percent, audience_ratings, critic_average,
+    # critic_percent
     else:
-        rotten_tomatoes_df = json_to_df('rotten-tomatoes')
-        rotten_tomatoes_df = clean_rt_data(rotten_tomatoes_df)
+        wikidata_df = merge_rt_data(wikidata_df, rating)
 
-        wikidata_df = pd.merge(wikidata_df, rotten_tomatoes_df,
-                               on='rotten_tomatoes_id')
+    influencers = get_best_rated(wikidata_df, category,
+                                 rating, num_of_influencers)
+    wikidata_df[category] = wikidata_df[category].apply(
+        filter_category,
+        influencers=influencers)
 
-    interesting_points = get_interesting_points(wikidata_df, score)
-    # Map all the points
-    for category in CATEGORIES:
-        wikidata_df = map_wikidata_id(wikidata_df, category)
-    # interesting_points = json_to_df('interesting_points')['point'].tolist()
+    cleaned_wikidata_df = wikidata_df[['label', category, rating]].dropna()
 
-    # poi = points of interest
-    # Combine all the catergories into 1 list
-    wikidata_df['poi'] = wikidata_df.apply(filter_and_join, axis=1,
-                                           interesting_points=interesting_points)
-    cleaned_wikidata_df = wikidata_df[['label', 'poi', score]].dropna()
+    mapped_wikidata_df = map_wikidata_id(cleaned_wikidata_df, category)
 
-    df_to_json(cleaned_wikidata_df, 'movies_by_{}'.format(score))
-    return cleaned_wikidata_df
+    return mapped_wikidata_df
 
 
 def main():
@@ -270,7 +242,7 @@ def main():
     #                'audience_ratings', 'critic_average', 'critic_percent',
     #                'nbox', 'ncost', 'return']
     wikidata_file = sys.argv[1]
-    get_filtered_wikidata(wikidata_file, 'critic_average')
+    get_filtered_wikidata(wikidata_file, 'genre', 'return', 50)
 
 
 if __name__ == '__main__':
