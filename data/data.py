@@ -23,7 +23,6 @@ def df_to_json(df, file):
     saves pd dataframe as gzip file
     :param df: Dataframe
     :param file: String, name of the gzip file
-    :return:
     """
     df.to_json(path.abspath(JSON_PATH.format(file)),
                orient='records',
@@ -38,6 +37,7 @@ def prep_wikidata(wikidata_df, category, rating):
     'return' (nbox/ncost), and 'wikidata_id'. Remove any NaN in category
     :param wikidata_df: Dataframe, wikidata dataframe
     :param category: String, column of interest
+    :param rating: String, type of rating to focus
     :return: dataframe with extra columns removed
     """
     columns = [category, 'label', 'publication_date', 'wikidata_id',
@@ -46,6 +46,14 @@ def prep_wikidata(wikidata_df, category, rating):
         columns += ['return']
     wikidata_df = wikidata_df[columns]
     wikidata_df = wikidata_df.dropna(subset=[category])
+
+    if rating == 'return':
+        wikidata_df = clean_return_data(wikidata_df)
+    # audience_average, audience_percent, audience_ratings, critic_average,
+    # critic_percent
+    else:
+        wikidata_df = merge_rt_data(wikidata_df, rating)
+
     return wikidata_df
 
 
@@ -67,8 +75,8 @@ def merge_rt_data(wikidata_df, rating):
     """
     Combine wikidata with rotten tomatoes data to get specific rating
     :param wikidata_df: Dataframe, wikidata dataframe
-    :param rating: String
-    :return:
+    :param rating: String, type of rating to focus
+    :return: dataframe, wikidata and rotten tomatoes data merged
     """
     rt_df = json_to_df('rotten-tomatoes')
     rt_df = rt_df[['rotten_tomatoes_id', rating]]
@@ -86,20 +94,8 @@ def map_wikidata_id(data, category):
     """
     category_df = json_to_df(category)
     mapping = category_df.set_index('wikidata_id').T.to_dict('records')[0]
-    data[category] = data[category].apply(map_list_of_ids, mapping=mapping)
+    data[category] = data[category].map(mapping)
     return data
-
-
-def map_list_of_ids(category, mapping):
-    """
-    Maps a list of wikidata_ids to its proper name
-    :param category: List, list of wikidata_ids
-    :param mapping: Dict, wikidata to proper name
-    :return: List of proper names
-    """
-    series = pd.Series(category)
-    mapped_series = series.map(mapping)
-    return mapped_series.tolist()
 
 
 def split_list_into_rows(row, row_accumulator, column):
@@ -156,30 +152,36 @@ def avg_by_category(data, category, rating):
     return merged_df
 
 
-def get_top(data, rating, num_of_influencers):
+def get_top(data, rating, min_num_of_movies, num_of_influencers):
     """
-    Remove any person involved in less than 5 movies (arbitrary) and sort by the
-    rating (return, rotten_tomatos scores). Select the top
-    x (num of influncers) values
+    Remove any person/genre involved in less than (min num of movies) movies
+    (arbitrary) and sort by the rating (return, rotten_tomatos scores).
+    Select the top (num of influncers) values
     :param data: Dataframe,
     :param rating: String, type of rating to focus
+    :param min_num_of_movies: int, filter out any with less than
+    :param num_of_influencers: int, number of points to take
     :return: dataframe sorted by descending score,
     """
-    data = data.loc[(data['movies'] >= 5)]
+    data = data.loc[(data['movies'] >= min_num_of_movies)]
     data = data.sort_values(rating, ascending=False)
     data = data.head(num_of_influencers)
     return data
 
 
-def get_best_rated(wikidata_df, category, rating, num_of_influencers):
+def get_best_rated(wikidata_df, category, rating,
+                   min_num_of_movies,
+                   num_of_influencers):
     """
     Find all the top people/genre of each category
     :param wikidata_df: Dataframe, wikidata
     :param rating: String, type of rating to focus
+    :param min_num_of_movies: int, filter out any with less than
+    :param num_of_influencers: int, number of points to take
     :return: list of best rated people/genres
     """
     data = avg_by_category(wikidata_df, category, rating)
-    best_rated = get_top(data, rating, num_of_influencers)
+    best_rated = get_top(data, rating, min_num_of_movies, num_of_influencers)
     return best_rated[category].tolist()
 
 
@@ -198,14 +200,16 @@ def filter_category(category, influencers):
 
 
 def get_filtered_wikidata(wikidata_file, category, rating,
+                          min_num_of_movies=5,
                           num_of_influencers=50):
     """
     Filter the movie database and select the category and
     :param wikidata_file: String, name of the wikidata file
     :param category: String, category of interest (genre, cast_member, director)
     :param rating: String, type of rating to focus
+    :param min_num_of_movies: int, filter out any with less than
     :param num_of_influencers: int, number of popular categories to use
-    :return:
+    :return: dataframe, movies by category
     """
     """
     Get the notable points (cast members, directors, genres) of a movie and the
@@ -214,27 +218,21 @@ def get_filtered_wikidata(wikidata_file, category, rating,
     :param score: string, rating to focus on
     :return: Dataframe, filtered dataframe with all notable points
     """
+    print("DEBUG: Start wikidata filter")
     wikidata_df = json_to_df(wikidata_file)
     wikidata_df = prep_wikidata(wikidata_df, category, rating)
 
-    if rating == 'return':
-        wikidata_df = clean_return_data(wikidata_df)
-    # audience_average, audience_percent, audience_ratings, critic_average,
-    # critic_percent
-    else:
-        wikidata_df = merge_rt_data(wikidata_df, rating)
-
-    influencers = get_best_rated(wikidata_df, category,
-                                 rating, num_of_influencers)
+    print("DEBUG: Get most influential ")
+    influencers = get_best_rated(wikidata_df, category, rating,
+                                 min_num_of_movies,
+                                 num_of_influencers)
     wikidata_df[category] = wikidata_df[category].apply(
         filter_category,
         influencers=influencers)
 
     cleaned_wikidata_df = wikidata_df[['label', category, rating]].dropna()
 
-    mapped_wikidata_df = map_wikidata_id(cleaned_wikidata_df, category)
-
-    return mapped_wikidata_df
+    return cleaned_wikidata_df
 
 
 def main():
@@ -242,8 +240,24 @@ def main():
     #                'audience_ratings', 'critic_average', 'critic_percent',
     #                'nbox', 'ncost', 'return']
     wikidata_file = sys.argv[1]
-    get_filtered_wikidata(wikidata_file, 'genre', 'return', 50)
+    # category = 'genre'
+    # rating = 'critic_percent'
+    # wikidata_df = json_to_df(wikidata_file)
+    # wikidata_df = prep_wikidata(wikidata_df, category, rating)
+    #
+    #
+    #
+    # influencers = get_best_rated(wikidata_df, category, rating,
+    #                              min_num_of_movies=40,
+    #                              num_of_influencers=50)
+    # category_df = json_to_df(category)
+    # mapping = category_df.set_index('wikidata_id').T.to_dict('records')[0]
+    # influencers[category] = pd.Series(influencers[category]).map(mapping)
 
+    data = get_filtered_wikidata(wikidata_file, 'genre', 'critic_percent',
+                                 40, 50)
+
+    print("Done!")
 
 if __name__ == '__main__':
     main()
