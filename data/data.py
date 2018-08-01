@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import gzip
 from os import path
+from datetime import datetime
 
 JSON_PATH = path.dirname(__file__) + '/json/{}.json.gz'
 
@@ -30,7 +31,7 @@ def df_to_json(df, file):
                compression='gzip')
 
 
-def prep_wikidata(wikidata_df, category, rating):
+def prep_wikidata(wikidata_df, category, rating, year):
     """
     Remove extra columns of the wikidata dataframe and only keep a specific
     category ('cast_member', 'director', 'genre'), 'label', 'publication_date',
@@ -47,6 +48,7 @@ def prep_wikidata(wikidata_df, category, rating):
     wikidata_df = wikidata_df[columns]
     wikidata_df = wikidata_df.dropna(subset=[category])
 
+
     if rating == 'return':
         wikidata_df = clean_return_data(wikidata_df)
     # audience_average, audience_percent, audience_ratings, critic_average,
@@ -54,7 +56,17 @@ def prep_wikidata(wikidata_df, category, rating):
     else:
         wikidata_df = merge_rt_data(wikidata_df, rating)
 
+    if year:
+        wikidata_df = wikidata_df[pd.notnull(wikidata_df['publication_date'])]
+        wikidata_df['year'] = wikidata_df['publication_date'].apply(get_year)
+        wikidata_df = wikidata_df .loc[(wikidata_df['year'] >= year[0]) &
+                                       (wikidata_df['year'] < year[1])]
     return wikidata_df
+
+
+def get_year(date):
+    year = datetime.strptime(date, '%Y-%m-%d').year
+    return year
 
 
 def clean_return_data(data):
@@ -201,7 +213,8 @@ def filter_category(category, influencers):
 
 def get_filtered_wikidata(wikidata_file, category, rating,
                           min_num_of_movies=5,
-                          num_of_influencers=50):
+                          num_of_influencers=50,
+                          year=None):
     """
     Filter the movie database and select the category and
     :param wikidata_file: String, name of the wikidata file
@@ -220,7 +233,7 @@ def get_filtered_wikidata(wikidata_file, category, rating,
     """
     print("DEBUG: Start wikidata filter")
     wikidata_df = json_to_df(wikidata_file)
-    wikidata_df = prep_wikidata(wikidata_df, category, rating)
+    wikidata_df = prep_wikidata(wikidata_df, category, rating, year)
 
     print("DEBUG: Get most influential ")
     influencers = get_best_rated(wikidata_df, category, rating,
@@ -230,7 +243,8 @@ def get_filtered_wikidata(wikidata_file, category, rating,
         filter_category,
         influencers=influencers)
 
-    cleaned_wikidata_df = wikidata_df[['label', category, rating]].dropna()
+    cleaned_wikidata_df = wikidata_df[['label', 'publication_date',
+                                       category, rating]].dropna()
 
     return cleaned_wikidata_df
 
