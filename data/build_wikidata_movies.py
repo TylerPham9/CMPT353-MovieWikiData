@@ -136,6 +136,7 @@ def make_genre_map():
 
 def make_custom_map(category):
     """
+    Written by Tyler Pham
     Make mapping of of a category wikidata_id value to human-readable label.
     Output directory is the same name of the category
     Adapted from 'make_genre_map'
