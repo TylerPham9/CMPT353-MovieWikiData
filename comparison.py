@@ -1,17 +1,11 @@
-import pandas as pd
-import numpy as np
-from sklearn.svm import SVR
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MultiLabelBinarizer
 from scipy import stats
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 import data.data as dm
-import os.path
 import argparse
-from datetime import datetime
+import seaborn
+import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--mode", '-m', type=str)
 parser.add_argument("--category", "-c", type=str,
                     help="Property to focus on (cast_member, director, genre)",
                     choices=['genre', 'cast_member', 'director'])
@@ -19,7 +13,7 @@ parser.add_argument("--score", "-s", type=str,
                     help="Score to focus on (critic_percent, return)",
                     choices=['return', 'critic_percent', 'critic_average',
                              'audience_percent', 'audience_average'])
-parser.add_argument("--movies", "-mo", type=int,
+parser.add_argument("--movies", "-m", type=int,
                     help="Minimum number of movies of each property",
                     default=40)
 parser.add_argument("--influencers", "-i", type=int,
@@ -31,7 +25,6 @@ parser.add_argument("--year", "-y", type=int, nargs='+',
 
 args = parser.parse_args()
 
-
 filename = '{}-{}-{}-{}'.format(args.category, args.score, args.movies,
                                 args.influencers)
 
@@ -41,27 +34,9 @@ if args.year:
 ALPHA = 0.05
 
 
-def get_movie_data():
-    """
-    Based on the parameters, filter and clean the data and create a json file.
-    If the json file is already created, use that instead.
-    :return: dataframe, movie data
-    """
-    if os.path.isfile(dm.JSON_PATH.format(filename)):
-        data = dm.json_to_df(filename)
-    else:
-        data = dm.get_filtered_wikidata('wikidata-movies', args.category,
-                                        args.score, args.movies,
-                                        args.influencers, args.year)
-        data = dm.explode_dataframe_by_column(data, args.category)
-        data = dm.map_wikidata_id(data, args.category)
-        dm.df_to_json(data, filename)
-
-    return data
-
-
 def main():
-    data = get_movie_data(filename)
+    seaborn.set()
+    data = dm.get_movie_data(filename, args)
 
     print("DEGUG: TukeyHSD")
     data_pivoted = data.pivot(columns=args.category)[args.score]
@@ -78,29 +53,47 @@ def main():
             data[args.score], data[args.category],
             alpha=ALPHA)
 
+        print(data.groupby(args.category).agg({
+            args.score: 'mean'}).sort_values(args.score, ascending=False))
+
         title_score = args.score.title().replace("_", " ")
-        if args.category == "return":
+        if args.score == "return":
             xlabel = "Percent Return (box office/cost)"
         else:
-            xlabel = "Rotten Tomatoe's {}".format(
+            xlabel = "Rotten Tomatoes' {}".format(
                 title_score)
         ylabel = args.category.title().replace("_", " ") + 's'
 
         title = "{}' {} Comparison".format(
             ylabel, title_score
         )
+        if args.year:
+            title += " from {} to {}".format(args.year[0], args.year[1])
+
+        ax = plt.axes()
+        plt.subplots_adjust(left=.20)
+        ax.yaxis.label.set_size(20)
+        ax.xaxis.label.set_size(20)
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(16)
+            tick.label.set_rotation(30)
+
+        for tick in ax.xaxis.get_major_ticks():
+            tick.label.set_fontsize(14)
 
         fig = posthoc.plot_simultaneous(
             xlabel=xlabel,
             ylabel=ylabel,
-            figsize=(16, 8))
+            ax=ax,
+            figsize=(16, 8),
+            )
         fig.suptitle(title)
-        # fig.show()
         fig.savefig("figures/" + filename)
     else:
         print("Can't confirm there is a difference between means")
 
     print("Done!")
+
 
 if __name__ == '__main__':
     main()

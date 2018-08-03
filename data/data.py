@@ -249,6 +249,25 @@ def get_filtered_wikidata(wikidata_file, category, rating,
     return cleaned_wikidata_df
 
 
+def get_movie_data(filename, args):
+    """
+    Based on the parameters, filter and clean the data and create a json file.
+    If the json file is already created, use that instead.
+    :return: dataframe, movie data
+    """
+    if path.isfile(JSON_PATH.format(filename)):
+        data = json_to_df(filename)
+    else:
+        data = get_filtered_wikidata('wikidata-movies', args.category,
+                                        args.score, args.movies,
+                                        args.influencers, args.year)
+        data = explode_dataframe_by_column(data, args.category)
+        data = map_wikidata_id(data, args.category)
+        df_to_json(data, filename)
+
+    return data
+
+
 def main():
     # req_columns = [column, 'audience_average', 'audience_percent',
     #                'audience_ratings', 'critic_average', 'critic_percent',
